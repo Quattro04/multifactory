@@ -15,9 +15,10 @@ exports.FactoryWorld = class extends colyseus.Room {
             z: 0
         };
 
-        // setTimeout(() => this.send(player, {event: "CURRENT_PLAYERS", players: players}), 500);
+        const currentPlayers = JSON.parse(JSON.stringify(players))
+        delete currentPlayers[player.sessionId]
 
-        this.broadcast({event: "CURRENT_PLAYERS", players: players}, {except: player});
+        this.send(player, {event: "CURRENT_PLAYERS", players: currentPlayers});
         this.broadcast({event: "PLAYER_JOINED", ...players[player.sessionId]}, {except: player});
     }
 
@@ -40,6 +41,12 @@ exports.FactoryWorld = class extends colyseus.Room {
             this.broadcast({
                 event: "BULLET_ADD",
                 bullet: data.bullet
+            }, {except: player})
+        }
+        if (data.event === 'IVE_BEEN_HIT') {
+            this.broadcast({
+                event: "BULLET_REMOVE",
+                bulletId: data.bulletId
             }, {except: player})
         }
     }

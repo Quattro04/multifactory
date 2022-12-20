@@ -7,6 +7,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { Bullet } from './bullet';
 import {onlinePlayers, room, Animation} from './socketServer';
 import { clone } from 'three/examples/jsm/utils/SkeletonUtils.js';
+import { loadModel } from './models/ModelLoader';
 
 // SCENE
 const scene = new THREE.Scene();
@@ -36,25 +37,18 @@ generateFloor()
 
 // MODEL WITH ANIMATIONS
 let models: Map<string, THREE.Group> = new Map()
-let model: THREE.Group;
+let characterModel: THREE.Object3D
 var characterControls: CharacterControls
-new GLTFLoader().load('models/Soldier.glb', function (gltf) {
-    model = gltf.scene;
-    model.traverse(function (object: any) {
+
+
+loadModel('models/Soldier.glb').then(({ model, mixer, animations }) => {
+    characterModel = model
+    characterModel.traverse(function (object: any) {
         if (object.isMesh) object.castShadow = true;
     });
-    scene.add(model);
-
-    const gltfAnimations: THREE.AnimationClip[] = gltf.animations;
-
-    const mixer = new THREE.AnimationMixer(model);
-    const animationsMap: Map<string, THREE.AnimationAction> = new Map()
-    gltfAnimations.filter(a => a.name != 'TPose').forEach((a: THREE.AnimationClip) => {
-        animationsMap.set(a.name, mixer.clipAction(a))
-    })
-
-    characterControls = new CharacterControls(model, mixer, animationsMap,  camera,  'Idle')
-});
+    scene.add(characterModel)
+    characterControls = new CharacterControls(model, mixer, animations,  camera,  'Idle')
+})
 
 // CONTROL KEYS
 const keysPressed = {}
@@ -73,19 +67,20 @@ const isMoving = () => {
 }
 
 // SHOOTING
-const bullets: Array<Bullet> = []
-let bulletId = 0
+const bullets: Map<number, Bullet> = new Map()
+const hitBoxSize: number = 0.2
+const bulletAliveTime: number = 1000
 
 let isShooting: boolean = false
 let isShootingTimeout: boolean = true
 let mouseX: number
 let mouseZ: number
-let angle: number
+let mouseAngle: number
 const bulletSpeed: number = 0.1
 document.addEventListener('mousemove', (event) => {
     mouseX = event.x - window.innerWidth / 2
     mouseZ = event.y - window.innerHeight / 2
-    angle = Math.atan2(-mouseX, -mouseZ)
+    mouseAngle = Math.atan2(-mouseX, -mouseZ)
 }, false);
 
 document.addEventListener('mousedown', (event) => {
@@ -94,6 +89,36 @@ document.addEventListener('mousedown', (event) => {
 document.addEventListener('mouseup', (event) => {
     isShooting = false
 }, false);
+
+let maximumHealth = 100
+let currentHealth = 100
+const playerHitTimeout = 50
+let playerHitEnabled = true
+const playerHit = () => {
+    currentHealth -= 10
+    document.getElementById('healthbar').style.width = (currentHealth / maximumHealth) * 100 + '%'
+}
+
+const addBullet = (uniqueId: number, x: number, z: number, angle: number, speed: number, friendly: boolean) => {
+    const bullet = new Bullet(uniqueId, x, z, angle, speed, friendly)
+    scene.add(bullet.getObject())
+
+    bullets.set(bullet.uniqueId, bullet)
+
+    setTimeout(() => {
+        if (bullets.get(bullet.uniqueId)) {
+            removeBullet(bullet.uniqueId)
+        }
+    }, bulletAliveTime)
+
+    return bullet
+}
+
+const removeBullet = (bulletId: number) => {
+    const bullet = bullets.get(bulletId)
+    scene.remove(bullet.getObject())
+    bullets.delete(bullet.uniqueId)
+}
 
 // AXES HELPER
 // const axesHelper = new THREE.AxesHelper( 5 );
@@ -115,9 +140,8 @@ function animate() {
 
     if (isShooting && isShootingTimeout) {
         isShootingTimeout = false
-        const bullet = new Bullet(model.position.x, model.position.z, angle, bulletSpeed)
-        scene.add(bullet.getObject())
-        bullets.push(bullet)
+
+        const bullet = addBullet(Date.now(), characterModel.position.x, characterModel.position.z, mouseAngle, bulletSpeed, true)
 
         // Send bullet to server
         room.then((room) => room.send({
@@ -130,8 +154,25 @@ function animate() {
         }, 300)
     }
 
-    Object.values(bullets).forEach(bullet => {
+    // Update bullet position and check for hits
+    bullets.forEach(bullet => {
         bullet.updatePosition()
+
+        const point = new THREE.Vector3(characterModel.position.x, 0, characterModel.position.z)
+
+        if (!bullet.friendly) {
+            // Check for player collision
+            const distance = point.distanceTo(new THREE.Vector3(bullet.x, 0, bullet.z))
+            if (distance < hitBoxSize) {
+                playerHit()
+                removeBullet(bullet.uniqueId)
+
+                room.then((room) => room.send({
+                    event: "IVE_BEEN_HIT",
+                    bulletId: bullet.uniqueId
+                }));
+            }
+        }
     })
 
     // if (model && angle) {
@@ -139,11 +180,11 @@ function animate() {
     // }
 
     // Send position to server if moving
-    if (socketKey && model) {
+    if (socketKey && characterModel) {
         room.then((room) => room.send({
             event: "PLAYER_POSITION_UPDATE",
-            x: model.position.x,
-            z: model.position.z,
+            x: characterModel.position.x,
+            z: characterModel.position.z,
             keysPressed
         }));
         socketKey = false
@@ -229,22 +270,17 @@ const changeAnimation = (from: THREE.AnimationAction, to: THREE.AnimationAction)
 }
 
 const addPlayer = (x: number, z: number, playerSession: string) => {
-    new GLTFLoader().load('models/Soldier.glb', function (gltf) {
-        const model: THREE.Group = gltf.scene;
+
+    console.log('adding player ', playerSession)
+
+    loadModel('models/Soldier.glb').then(({ model, mixer, animations }) => {
         model.traverse(function (object: any) {
-            if (object.isMesh) object.castShadow = true;
+            if (object.isMesh) object.castShadow = true
         });
-        scene.add(model);
 
-        // Make animationsMap for this model
-        const gltfAnimations: THREE.AnimationClip[] = gltf.animations;
-        const mixer = new THREE.AnimationMixer(model);
-        const animationsMap: Map<string, THREE.AnimationAction> = new Map()
-        gltfAnimations.filter(a => a.name != 'TPose').forEach((a: THREE.AnimationClip) => {
-            animationsMap.set(a.name, mixer.clipAction(a))
-        })
+        scene.add(model)
 
-        animationsMap.get('Idle').play();
+        animations.get('Idle').play()
 
         // Add coordinates, model and animations to onlinePlayers
         const player = {
@@ -252,7 +288,7 @@ const addPlayer = (x: number, z: number, playerSession: string) => {
             x: x,
             z: z,
             model,
-            animations: animationsMap,
+            animations: animations,
             mixer,
             currentAnimation: Animation.IDLE
         }
@@ -267,25 +303,27 @@ interface Data {
     sessionId?: string;
     keysPressed?: Record<string, any>;
     bullet?: any;
+    bulletId?: number;
     players: Array<any>
 }
 
 room.then(room => {
     room.onMessage((data: Data) => {
 
-        console.log(data.event)
+        // console.log(data.event)
 
         if (data.event === 'CURRENT_PLAYERS') {
-            console.log(data.players)
             Object.values(data.players).map(p => {
                 addPlayer(p.x, p.z, p.sessionId)
             })
         }
         if (data.event === 'PLAYER_JOINED') {
-            if (!model || !scene) return
+            if (!characterModel || !scene) return
             addPlayer(data.x, data.z, data.sessionId)
         }
         if (data.event === 'PLAYER_LEFT') {
+            scene.remove(onlinePlayers[data.sessionId].model)
+            delete onlinePlayers[data.sessionId]
         }
         if (data.event === 'PLAYER_POSITION_UPDATE') {
             const onlinePlayer = onlinePlayers[data.sessionId]
@@ -316,10 +354,10 @@ room.then(room => {
             }
         }
         if (data.event === 'BULLET_ADD') {
-            console.log(data.bullet)
-            const bullet = new Bullet(data.bullet.x, data.bullet.z, data.bullet.angle, data.bullet.speed)
-            scene.add(bullet.getObject())
-            bullets.push(bullet)
+            addBullet(data.bullet.uniqueId, data.bullet.x, data.bullet.z, data.bullet.angle, data.bullet.speed, false)
+        }
+        if (data.event === 'BULLET_REMOVE') {
+            removeBullet(data.bulletId)
         }
     })
 })

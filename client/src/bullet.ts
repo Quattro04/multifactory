@@ -1,21 +1,21 @@
 import THREE = require("three")
 
 export class Bullet {
-
+    uniqueId: number
     x: number
     z: number
     angle: number
     speed: number
     bullet: THREE.Object3D
+    friendly: boolean
 
-    constructor(x: number, z: number, angle: number, speed: number) {
+    constructor(uniqueId: number, x: number, z: number, angle: number, speed: number, friendly: boolean) {
+        this.uniqueId = uniqueId
         this.x = x
         this.z = z
         this.angle = angle
         this.speed = speed;
-    }
-
-    getObject = (): THREE.Object3D => {
+        this.friendly = friendly
         this.bullet = new THREE.Mesh(
             new THREE.SphereGeometry(0.05, 10, 10),
             new THREE.MeshBasicMaterial({
@@ -23,6 +23,9 @@ export class Bullet {
             })
         )
         this.bullet.position.set(this.x, 1, this.z)
+    }
+
+    getObject = (): THREE.Object3D => {
         return this.bullet
     }
 
